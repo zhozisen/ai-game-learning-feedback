@@ -1,0 +1,42 @@
+name: 学生问题反馈
+description: 网站问题、学习资料纠错、视频失效或建议
+title: "[学生反馈] "
+labels: ["学生反馈", "待处理"]
+body:
+  - type: markdown
+    attributes:
+      value: 本仓库公开，姓名和问题对所有人可见。请勿提交密码或他人隐私。
+  - type: input
+    id: student
+    attributes:
+      label: 学生姓名
+      description: 与学习网站填写的姓名一致，姓名为自填。
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: 问题分类
+      options: [网站问题, 内容纠错, 视频资源, 测试题, 操作环境, 改进建议]
+    validations:
+      required: true
+  - type: input
+    id: station
+    attributes:
+      label: 学习站点与任务步骤
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: 问题情况
+      description: 写明操作步骤、实际结果、期望结果。可附不含隐私的截图。
+    validations:
+      required: true
+  - type: checkboxes
+    id: public
+    attributes:
+      label: 公开确认
+      options:
+        - label: 我知道姓名和问题会公开，已检查没有密码或他人隐私。
+          required: true
