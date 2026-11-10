@@ -1,7 +1,8 @@
-"""Process the approved Issue snapshot into the public work catalog."""
+"""Validate a work application before writing it to the public catalog."""
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -17,6 +18,22 @@ class ApprovalError(ValueError):
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+def check_public_repo(owner, project):
+    headers = {'User-Agent': 'class-works-validator', 'Accept': 'application/vnd.github+json'}
+    if token := os.environ.get('GH_TOKEN'):
+        headers['Authorization'] = 'Bearer ' + token
+    url = f'https://api.github.com/repos/{owner}/{project}'
+    try:
+        with build_opener(NoRedirect()).open(Request(url, headers=headers), timeout=10) as response:
+            repo = json.loads(response.read(65536))
+    except (URLError, OSError, ValueError) as exc:
+        raise ApprovalError('仓库不存在或不可公开访问，请检查源码仓库网址') from exc
+    if repo.get('private') is not False or repo.get('owner', {}).get('login', '').lower() != owner.lower():
+        raise ApprovalError('请使用自己账号下的公开源码仓库')
+    if not repo.get('has_pages'):
+        raise ApprovalError('源码仓库尚未启用 GitHub Pages')
 
 
 def check_game(play_url):
@@ -43,9 +60,16 @@ def check_game(play_url):
 
 
 def approve(event, reviewer):
-    if event.get('label', {}).get('name') != '通过上架' or event.get('sender', {}).get('login', '').lower() != reviewer.lower():
-        raise ApprovalError('请由班级网站维护者添加「通过上架」标签')
     issue = event['issue']
+    applicant = issue.get('user', {}).get('login', '').lower()
+    sender = event.get('sender', {})
+    actor = sender.get('login', '').lower()
+    automatic = event.get('action') in {'opened', 'edited', 'reopened'}
+    if automatic:
+        if not applicant or actor != applicant or sender.get('type') != 'User' or issue.get('state') != 'open':
+            raise ApprovalError('请使用申请人的 GitHub 账号提交或更新开放申请')
+    elif event.get('label', {}).get('name') != '通过上架' or actor != reviewer.lower():
+        raise ApprovalError('申请事件不符合自动检查条件')
     if not issue['title'].startswith('[作品申请]') or 'pull_request' in issue:
         raise ApprovalError('请使用「[作品申请]」开头的 Issue')
     matches = re.findall(r'```json[ \t]*\r?\n(.*?)\r?\n```', issue.get('body') or '', flags=re.DOTALL)
@@ -67,6 +91,8 @@ def approve(event, reviewer):
     if not repo or repo[2] in ('.', '..'):
         raise ApprovalError('请填写完整的 GitHub 源码仓库网址')
     owner, project = repo.groups()
+    if automatic and owner.lower() != applicant:
+        raise ApprovalError('仓库归属与申请账号不一致，请提交自己 GitHub 账号下的仓库')
     url = urlsplit(item['playUrl'])
     if project.lower() == f'{owner.lower()}.github.io':
         prefix = '/'
@@ -76,18 +102,27 @@ def approve(event, reviewer):
             or url.query or url.fragment or not url.path.startswith(prefix)
             or not re.fullmatch(r'(?:[a-zA-Z0-9_-]+/)*(?:index[.]html)?', url.path[len(prefix):])):
         raise ApprovalError('试玩地址须指向源码仓库对应的 GitHub Pages 目录或 index.html')
+    if automatic:
+        check_public_repo(owner, project)
     check_game(item['playUrl'])
     item.update(
         id='student-' + hashlib.sha256(f'{owner}/{project}'.lower().encode()).hexdigest()[:24],
         kind='student', approved=True, reviewedAt=datetime.now(timezone.utc).date().isoformat(),
         applicationNumber=issue['number'],
+        applicationUpdatedAt=issue.get('updated_at', ''),
     )
     return item
 
 
 def merge_work(works, item):
-    if any(other['id'] == item['id'] for other in works):
-        return [item if other['id'] == item['id'] else other for other in works]
+    def order(work):
+        return work.get('applicationNumber', 0), work.get('applicationUpdatedAt', '')
+
+    for index, other in enumerate(works):
+        if other['id'] == item['id']:
+            if order(other) > order(item):
+                return works
+            return [*works[:index], item, *works[index + 1:]]
     return [*works, item]
 
 

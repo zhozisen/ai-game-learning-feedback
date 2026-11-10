@@ -1,7 +1,13 @@
-name: 作品批准上架
+name: 作品自动上架
 on:
   issues:
-    types: [labeled]
+    types: [opened, edited, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 仅验证这条申请，不写入公开清单
+        required: true
+        type: number
 
 permissions:
   contents: write
@@ -9,28 +15,41 @@ permissions:
 
 jobs:
   publish:
-    if: github.event.label.name == '通过上架' && github.actor == github.repository_owner && startsWith(github.event.issue.title, '[作品申请]')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (startsWith(github.event.issue.title, '[作品申请]') &&
+        ((github.event.action != 'labeled' && github.actor == github.event.issue.user.login) ||
+         (github.event.label.name == '通过上架' && github.actor == github.repository_owner)))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
       REVIEWER: ${{ github.repository_owner }}
     steps:
       - uses: actions/checkout@v4
-      - name: 核对批准快照与试玩文件
+      - name: 核对申请快照与试玩文件
         id: validate
         shell: bash
         run: |
-          if python3 scripts/publish_work.py "$GITHUB_EVENT_PATH" "$REVIEWER" validate "$RUNNER_TEMP/approved-work.json" 2>"$RUNNER_TEMP/work-error"; then
+          event="$GITHUB_EVENT_PATH"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            [[ "$ISSUE_NUMBER" =~ ^[0-9]+$ ]]
+            event="$RUNNER_TEMP/application-event.json"
+            gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE_NUMBER" --jq '{action:"opened",sender:.user,issue:.}' > "$event"
+          fi
+          if python3 scripts/publish_work.py "$event" "$REVIEWER" validate "$RUNNER_TEMP/approved-work.json" 2>"$RUNNER_TEMP/work-error"; then
             echo "passed=true" >> "$GITHUB_OUTPUT"
+            echo '作品申请及试玩文件检查通过'
           else
             cat "$RUNNER_TEMP/work-error"
-            message=$(head -n 1 "$RUNNER_TEMP/work-error")
-            gh issue comment "$ISSUE_NUMBER" --body "作品上架检查未通过。$message。修正后请联系老师重新添加「通过上架」标签。"
+            if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+              message=$(head -n 1 "$RUNNER_TEMP/work-error")
+              gh issue comment "$ISSUE_NUMBER" --body "作品自动检查未通过。$message。请修正后编辑原申请，再触发检查。"
+            fi
             exit 1
           fi
       - name: 更新公开清单
-        if: steps.validate.outputs.passed == 'true'
+        if: github.event_name == 'issues' && steps.validate.outputs.passed == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -41,19 +60,19 @@ jobs:
             python3 scripts/publish_work.py "$GITHUB_EVENT_PATH" "$REVIEWER" merge "$RUNNER_TEMP/approved-work.json"
             git add approved-works.json
             if git diff --cached --quiet; then exit 0; fi
-            git commit -m "Approve work from issue #$ISSUE_NUMBER"
+            git commit -m "Publish work from issue #$ISSUE_NUMBER"
             if git push origin HEAD:refs/heads/main; then exit 0; fi
             sleep "$((attempt * 2))"
           done
           exit 1
       - name: 回报上架结果
-        if: always() && steps.validate.outputs.passed == 'true'
+        if: always() && github.event_name == 'issues' && steps.validate.outputs.passed == 'true'
         env:
           JOB_STATUS: ${{ job.status }}
         shell: bash
         run: |
           if [ "$JOB_STATUS" = success ]; then
-            gh issue comment "$ISSUE_NUMBER" --body '已写入公开作品清单。稍等 GitHub 缓存更新后，刷新学习网站的「同学作品」即可查看。'
+            gh issue comment "$ISSUE_NUMBER" --body '自动检查通过，已处理公开作品清单。刷新学习网站的「同学作品」即可查看。'
           else
-            gh issue comment "$ISSUE_NUMBER" --body '试玩文件检查已通过，公开清单写入失败。请老师查看本次 Actions 日志，修复后重新运行。'
+            gh issue comment "$ISSUE_NUMBER" --body '试玩文件检查通过，公开清单写入失败。请稍后编辑原申请重试。'
           fi
