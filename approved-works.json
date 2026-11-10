@@ -1,1 +1,16 @@
-[]
+[
+  {
+    "title": "深海食纪",
+    "author": "xsyt9527",
+    "description": "肉鸽大鱼吃小鱼：深海吞食成长，局内升级三选一，Lv.6 进化，10分钟一局，对抗机器船首领。",
+    "controls": "主界面点开始游戏，选角后进入局内；鼠标或触屏移动控制游动，点击释放主动技能，吃小鱼成长。",
+    "version": "v0.3-原型",
+    "repoUrl": "https://github.com/xsyt9527/111",
+    "playUrl": "https://xsyt9527.github.io/111/",
+    "id": "student-2d64eae3a116414e1f067dbf",
+    "kind": "student",
+    "approved": true,
+    "reviewedAt": "2026-11-10",
+    "applicationNumber": 3
+  }
+]
